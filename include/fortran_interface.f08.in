@@ -1,0 +1,391 @@
+MODULE libheric_interface
+   
+   USE ISO_C_BINDING, ONLY: C_CHAR, C_INT, C_DOUBLE, C_PTR, C_NULL_CHAR
+    
+   IMPLICIT NONE
+   INTEGER, PARAMETER :: LIBHERIC_MAX_AM = @MAX_AM@
+   INTEGER, PARAMETER :: LIBHERIC_AM_LIMIT = 8
+   INTEGER, PARAMETER :: LIBHERIC_FSTR_LEN = @FSTR_LEN@
+   INTEGER, PARAMETER :: LIBHERIC_MAX_DEVICES_ON_NODE = @MAX_DEVICES_ON_NODE@
+   INTEGER, PARAMETER, DIMENSION(0:LIBHERIC_AM_LIMIT) :: LIBHERIC_NCO = [ 1, 3, 6, 10, 15, 21, 28, 36, 45 ]
+   INTEGER, PARAMETER, DIMENSION(0:LIBHERIC_AM_LIMIT) :: LIBHERIC_NSO = [ 1, 3, 5,  7,  9, 11, 13, 15, 17 ]
+
+   TYPE acc_kind
+       CHARACTER(kind=C_CHAR, len=LIBHERIC_FSTR_LEN) :: name
+       CHARACTER(kind=C_CHAR, len=LIBHERIC_FSTR_LEN) :: type
+       CHARACTER(kind=C_CHAR, len=LIBHERIC_FSTR_LEN) :: library
+   END TYPE
+
+   TYPE acc_device
+       CHARACTER(kind=C_CHAR, len=LIBHERIC_FSTR_LEN) :: name
+       CHARACTER(kind=C_CHAR, len=LIBHERIC_FSTR_LEN) :: bdf
+       CHARACTER(kind=C_CHAR, len=LIBHERIC_FSTR_LEN) :: cpu_name
+       INTEGER                                           :: num_cores
+       TYPE(acc_kind)                                    :: kind
+   END TYPE
+
+   PUBLIC :: LIBHERIC_FSTR_LEN, &
+             LIBHERIC_MAX_DEVICES_ON_NODE, &
+             acc_kind, &
+             acc_device, &
+             query_accelerator_devices, &
+             create_accelerator_context, &
+             free_accelerator_context, &
+             accelerator_context_functional, &
+             accelerator_context_set_quartet, &
+             accelerator_context_set_quartet_permutation, &
+             accelerator_context_set_atom_id, &
+             accelerator_context_set_set_id, &
+             accelerator_context_set_shell_id, &
+             accelerator_context_set_exponent_id, &
+             accelerator_context_set_offset, &
+             accelerator_context_submit_peri, &
+             accelerator_context_submit_ceri, &
+             accelerator_context_get_next_ceri, &
+             generate_quartet_permutations, &
+             generate_canonical_ids, &
+             pc2_hide_acl
+
+   INTERFACE
+      SUBROUTINE get_accelerator_devices(packed_kinds, num_kinds, packed_devices, num_devices) &
+          bind(C, name="get_accelerator_devices")
+         IMPORT C_CHAR, C_INT
+         CHARACTER(kind=C_CHAR) :: packed_kinds(*)
+         INTEGER(C_INT), VALUE  :: num_kinds
+         CHARACTER(kind=C_CHAR) :: packed_devices(*)
+         INTEGER(C_INT)         :: num_devices
+      END SUBROUTINE get_accelerator_devices
+      SUBROUTINE alloc_accelerator_context(ctx, &
+                                           packed_device, &
+                                           raw_cell_mat, &
+                                           raw_positions, raw_kinds,         num_positions, &
+                                           raw_exponents,                    num_exponents, &
+                                           raw_coefficients,                 num_shells, &
+                                           raw_kind_offsets, raw_kind_sizes, num_kinds, &
+                                           raw_set_offsets, raw_set_sizes,   max_sets, &
+                                           raw_shell_offsets, raw_shell_sizes) &
+                                           bind(C, name="alloc_accelerator_context")
+         IMPORT C_CHAR, C_INT, C_PTR, C_DOUBLE
+         TYPE(C_PTR)            :: ctx
+         CHARACTER(kind=C_CHAR) :: packed_device(*)
+         REAL(C_DOUBLE)         :: raw_cell_mat
+         REAL(C_DOUBLE)         :: raw_positions
+         INTEGER(C_INT)         :: raw_kinds
+         INTEGER(C_INT), VALUE  :: num_positions
+         REAL(C_DOUBLE)         :: raw_exponents
+         INTEGER(C_INT), VALUE  :: num_exponents
+         REAL(C_DOUBLE)         :: raw_coefficients
+         INTEGER(C_INT), VALUE  :: num_shells
+         INTEGER(C_INT)         :: raw_kind_offsets, raw_kind_sizes
+         INTEGER(C_INT), VALUE  :: num_kinds
+         INTEGER(C_INT)         :: raw_set_offsets, raw_set_sizes
+         INTEGER(C_INT), VALUE  :: max_sets
+         INTEGER(C_INT)         :: raw_shell_offsets, raw_shell_sizes
+      END SUBROUTINE
+      SUBROUTINE free_accelerator_context(ctx) bind(C, name="free_accelerator_context")
+         IMPORT C_PTR
+         TYPE(C_PTR), VALUE     :: ctx
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_functional(ctx, is_functional) bind(C, name="accelerator_context_functional")
+         IMPORT C_PTR, C_INT
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT)         :: is_functional
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_set_quartet(ctx, la, lb, lc, ld) bind(C, name="accelerator_context_set_quartet")
+         IMPORT C_PTR, C_INT
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: la
+         INTEGER(C_INT), VALUE  :: lb
+         INTEGER(C_INT), VALUE  :: lc
+         INTEGER(C_INT), VALUE  :: ld
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_set_quartet_permutation(ctx, perm) bind(C, name="accelerator_context_set_quartet_permutation")
+         IMPORT C_PTR, C_INT
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: perm
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_set_atom_id(ctx, quartet_pos, atom_id) bind(C, name="accelerator_context_set_atom_id")
+         IMPORT C_PTR, C_INT
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: quartet_pos
+         INTEGER(C_INT), VALUE  :: atom_id
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_set_set_id(ctx, quartet_pos, set_id) bind(C, name="accelerator_context_set_set_id")
+         IMPORT C_PTR, C_INT
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: quartet_pos
+         INTEGER(C_INT), VALUE  :: set_id
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_set_shell_id(ctx, quartet_pos, shell_id) bind(C, name="accelerator_context_set_shell_id")
+         IMPORT C_PTR, C_INT
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: quartet_pos
+         INTEGER(C_INT), VALUE  :: shell_id
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_set_exponent_id(ctx, quartet_pos, exp_id) bind(C, name="accelerator_context_set_exponent_id")
+         IMPORT C_PTR, C_INT
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: quartet_pos
+         INTEGER(C_INT), VALUE  :: exp_id
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_set_offset(ctx, off_pos, off_x, off_y, off_z) bind(C, name="accelerator_context_set_offset")
+         IMPORT C_PTR, C_INT
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: off_pos
+         INTEGER(C_INT), VALUE  :: off_x
+         INTEGER(C_INT), VALUE  :: off_y
+         INTEGER(C_INT), VALUE  :: off_z
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_submit_peri(ctx) bind(C, name="accelerator_context_submit_peri")
+         IMPORT C_PTR
+         TYPE(C_PTR), VALUE     :: ctx
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_submit_ceri(ctx) bind(C, name="accelerator_context_submit_ceri")
+         IMPORT C_PTR
+         TYPE(C_PTR), VALUE     :: ctx
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_finish_quartet_class(ctx) bind(C, name="accelerator_context_finish_quartet_class")
+         IMPORT C_PTR
+         TYPE(C_PTR), VALUE     :: ctx
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_get_next_ceri(ctx, integral_buffer) bind(C, name="accelerator_context_get_next_ceri")
+         IMPORT C_PTR, C_DOUBLE
+         TYPE(C_PTR), VALUE     :: ctx
+         REAL(C_DOUBLE)         :: integral_buffer
+      END SUBROUTINE
+      SUBROUTINE pc2_hide_acl() bind(C, name="pc2_hide_acl")
+      END SUBROUTINE 
+   END INTERFACE
+
+CONTAINS
+    SUBROUTINE pack_kinds(kinds, packed_kinds)
+        TYPE(acc_kind), DIMENSION(:), INTENT(IN)                :: kinds
+        CHARACTER(kind=C_CHAR, len=:), ALLOCATABLE, INTENT(OUT) :: packed_kinds
+        INTEGER                                                 :: num_kinds, i, name_off, type_off, lib_off
+        
+        num_kinds = SIZE(kinds)
+        packed_kinds = REPEAT(" ", num_kinds * LIBHERIC_FSTR_LEN * 3)
+        DO i = 1, num_kinds
+            name_off = ((i - 1) * 3 + 0) * LIBHERIC_FSTR_LEN + 1
+            type_off = ((i - 1) * 3 + 1) * LIBHERIC_FSTR_LEN + 1
+            lib_off  = ((i - 1) * 3 + 2) * LIBHERIC_FSTR_LEN + 1
+            packed_kinds(name_off:name_off + LEN_TRIM(kinds(i)%name)    + 1) = TRIM(kinds(i)%name) // C_NULL_CHAR
+            packed_kinds(type_off:type_off + LEN_TRIM(kinds(i)%type)    + 1) = TRIM(kinds(i)%type) // C_NULL_CHAR
+            packed_kinds(lib_off :lib_off  + LEN_TRIM(kinds(i)%library) + 1) = TRIM(kinds(i)%library) // C_NULL_CHAR 
+        END DO
+    END SUBROUTINE
+
+    SUBROUTINE pack_devices(devices, packed_devices)
+        TYPE(acc_device), DIMENSION(:), INTENT(IN)              :: devices
+        CHARACTER(kind=C_CHAR, len=:), ALLOCATABLE, INTENT(OUT) :: packed_devices
+        INTEGER                                                 :: i, dev_name_off, dev_bdf_off, dev_cpu_off, &
+                                                                   dev_cores_off, kind_name_off, kind_type_off, &
+                                                                   kind_lib_off, num_devices
+        CHARACTER(kind=C_CHAR, len=10)                          :: num_cores_str
+        num_devices = SIZE(devices)
+        packed_devices = REPEAT(" ", num_devices * LIBHERIC_FSTR_LEN * 7)
+        DO i = 1, num_devices
+            dev_name_off  = ((i - 1) * 7 + 0) * LIBHERIC_FSTR_LEN + 1
+            dev_bdf_off   = ((i - 1) * 7 + 1) * LIBHERIC_FSTR_LEN + 1
+            dev_cpu_off   = ((i - 1) * 7 + 2) * LIBHERIC_FSTR_LEN + 1
+            dev_cores_off = ((i - 1) * 7 + 3) * LIBHERIC_FSTR_LEN + 1
+            kind_name_off = ((i - 1) * 7 + 4) * LIBHERIC_FSTR_LEN + 1
+            kind_type_off = ((i - 1) * 7 + 5) * LIBHERIC_FSTR_LEN + 1
+            kind_lib_off  = ((i - 1) * 7 + 6) * LIBHERIC_FSTR_LEN + 1
+
+            WRITE(num_cores_str, "(I10)") devices(i)%num_cores
+
+            packed_devices(dev_name_off  :dev_name_off  + LEN_TRIM(devices(i)%name)         + 1) & 
+                = TRIM(devices(i)%name) // C_NULL_CHAR                                        
+            packed_devices(dev_bdf_off   :dev_bdf_off   + LEN_TRIM(devices(i)%bdf)          + 1) & 
+                = TRIM(devices(i)%bdf) // C_NULL_CHAR                                         
+            packed_devices(dev_cpu_off   :dev_cpu_off   + LEN_TRIM(devices(i)%cpu_name)     + 1) & 
+                = TRIM(devices(i)%cpu_name) // C_NULL_CHAR
+            packed_devices(dev_cores_off :dev_cores_off + LEN(ADJUSTL(num_cores_str))       + 1) & 
+                = ADJUSTL(num_cores_str) // C_NULL_CHAR
+            packed_devices(kind_name_off :kind_name_off + LEN_TRIM(devices(i)%kind%name)    + 1) & 
+                = TRIM(devices(i)%kind%name) // C_NULL_CHAR
+            packed_devices(kind_type_off :kind_type_off + LEN_TRIM(devices(i)%kind%type)    + 1) & 
+                = TRIM(devices(i)%kind%type) // C_NULL_CHAR
+            packed_devices(kind_lib_off  :kind_lib_off  + LEN_TRIM(devices(i)%kind%library) + 1) & 
+                = TRIM(devices(i)%kind%library) // C_NULL_CHAR
+        END DO
+
+    END SUBROUTINE
+
+    SUBROUTINE unpack_devices(packed_devices, num_devices, devices)
+        CHARACTER(kind=C_CHAR, len=:), ALLOCATABLE, INTENT(IN)   :: packed_devices
+        INTEGER                                                  :: num_devices
+        TYPE(acc_device), DIMENSION(:), ALLOCATABLE, INTENT(OUT) :: devices
+        INTEGER                                                  :: i, dev_name_off, dev_bdf_off, dev_cpu_off, &
+                                                                    dev_cores_off, kind_name_off, kind_type_off, &
+                                                                    kind_lib_off
+        CHARACTER(kind=C_CHAR, len=:), ALLOCATABLE               :: read_cores
+        
+        ALLOCATE(devices(num_devices))
+
+        DO i = 1, num_devices
+            dev_name_off  = ((i - 1) * 7 + 0) * LIBHERIC_FSTR_LEN + 1
+            dev_bdf_off   = ((i - 1) * 7 + 1) * LIBHERIC_FSTR_LEN + 1
+            dev_cpu_off   = ((i - 1) * 7 + 2) * LIBHERIC_FSTR_LEN + 1
+            dev_cores_off = ((i - 1) * 7 + 3) * LIBHERIC_FSTR_LEN + 1
+            kind_name_off = ((i - 1) * 7 + 4) * LIBHERIC_FSTR_LEN + 1
+            kind_type_off = ((i - 1) * 7 + 5) * LIBHERIC_FSTR_LEN + 1
+            kind_lib_off  = ((i - 1) * 7 + 6) * LIBHERIC_FSTR_LEN + 1
+
+            devices(i)%name = TRIM(packed_devices(dev_name_off:dev_name_off + LIBHERIC_FSTR_LEN - 1))
+            devices(i)%bdf  = TRIM(packed_devices(dev_bdf_off :dev_bdf_off  + LIBHERIC_FSTR_LEN - 1))
+            devices(i)%cpu_name =TRIM(packed_devices(dev_cpu_off :dev_cpu_off  + LIBHERIC_FSTR_LEN - 1)) 
+            read_cores = TRIM(packed_devices(dev_cores_off :dev_cores_off + LIBHERIC_FSTR_LEN - 1))
+            READ(read_cores, *) devices(i)%num_cores
+            devices(i)%kind%name    = TRIM(packed_devices(kind_name_off:kind_name_off + LIBHERIC_FSTR_LEN - 1))
+            devices(i)%kind%type    = TRIM(packed_devices(kind_type_off:kind_type_off + LIBHERIC_FSTR_LEN - 1))
+            devices(i)%kind%library = TRIM(packed_devices(kind_lib_off :kind_lib_off  + LIBHERIC_FSTR_LEN - 1))
+        END DO
+    END SUBROUTINE
+
+    SUBROUTINE query_accelerator_devices(kinds, devices)
+        TYPE(acc_kind), DIMENSION(:), INTENT(IN)                 :: kinds
+        TYPE(acc_device), DIMENSION(:), ALLOCATABLE, INTENT(OUT) :: devices
+        
+        INTEGER                                              :: num_kinds, num_devices
+        CHARACTER(kind=C_CHAR, len=:), ALLOCATABLE           :: packed_kinds
+        CHARACTER(kind=C_CHAR, len=:), ALLOCATABLE           :: packed_devices
+        
+        num_kinds = SIZE(kinds)
+        CALL pack_kinds(kinds, packed_kinds)
+        
+        packed_devices = REPEAT(" ", LIBHERIC_MAX_DEVICES_ON_NODE * LIBHERIC_FSTR_LEN * 7)
+
+        CALL get_accelerator_devices(packed_kinds, num_kinds, & 
+                                     packed_devices, num_devices)
+        
+
+        IF (num_devices > LIBHERIC_MAX_DEVICES_ON_NODE) THEN
+            WRITE(*, "('[WARNING] libheric discovered ',I3,' devices, but only ',I2,'were stored!')") &
+                num_devices, LIBHERIC_MAX_DEVICES_ON_NODE
+        END IF
+
+        CALL unpack_devices(packed_devices, MIN(num_devices, LIBHERIC_MAX_DEVICES_ON_NODE), devices)     
+
+    END SUBROUTINE
+
+    SUBROUTINE create_accelerator_context(ctx, dev, &
+                                          cell_mat, &
+                                          positions, kinds,         &
+                                          exponents,                &
+                                          coefficients,             &
+                                          kind_offsets, kind_sizes, &
+                                          set_offsets, set_sizes,   &
+                                          shell_offsets, shell_sizes) 
+        TYPE(C_PTR), INTENT(OUT)                                                :: ctx
+        TYPE(acc_device), INTENT(IN)                                            :: dev
+        REAL(C_DOUBLE), DIMENSION(3, 3),                            INTENT(IN)  :: cell_mat
+        REAL(C_DOUBLE), DIMENSION(:, :),                CONTIGUOUS, INTENT(IN)  :: positions
+        INTEGER(C_INT), DIMENSION(:),                   CONTIGUOUS, INTENT(IN)  :: kinds
+        REAL(C_DOUBLE), DIMENSION(:),                   CONTIGUOUS, INTENT(IN)  :: exponents    
+        REAL(C_DOUBLE), DIMENSION(:, :),                CONTIGUOUS, INTENT(IN)  :: coefficients
+        INTEGER(C_INT), DIMENSION(:),                   CONTIGUOUS, INTENT(IN)  :: kind_offsets, kind_sizes 
+        INTEGER(C_INT), DIMENSION(:, :),                CONTIGUOUS, INTENT(IN)  :: set_offsets, set_sizes 
+        INTEGER(C_INT), DIMENSION(LIBHERIC_MAX_AM + 1),             INTENT(IN)  :: shell_offsets, shell_sizes     
+
+        CHARACTER(kind=C_CHAR, len=:), ALLOCATABLE  :: packed_device
+
+        CALL pack_devices([dev], packed_device)
+        CALL alloc_accelerator_context(ctx, &
+                                       packed_device, &
+                                       cell_mat(1, 1), &
+                                       positions(1, 1), kinds(1), SIZE(positions, 2), &
+                                       exponents(1), SIZE(exponents, 1), &
+                                       coefficients(1, 1), SIZE(coefficients, 2), & 
+                                       kind_offsets(1), kind_sizes(1), SIZE(kind_offsets, 1), &
+                                       set_offsets(1, 1), set_sizes(1, 1), SIZE(set_offsets, 1), &
+                                       shell_offsets(1), shell_sizes(1))
+
+    END SUBROUTINE
+
+    SUBROUTINE generate_quartet_permutations(quartet, quartet_permutations, num_quartet_permutations)
+
+       INTEGER, INTENT(IN)   :: quartet(4)
+       INTEGER, INTENT(OUT)  :: quartet_permutations(5, 8)
+       INTEGER, INTENT(OUT)  :: num_quartet_permutations
+       LOGICAL               :: unique
+       INTEGER               :: la, lb, lc, ld
+       INTEGER               :: i, j
+
+       la = quartet(1)
+       lb = quartet(2)
+       lc = quartet(3)
+       ld = quartet(4)
+
+       quartet_permutations(:, 1) = [ la, lb, lc, ld, 0 ]  
+       quartet_permutations(:, 2) = [ la, lb, ld, lc, 1 ] 
+       quartet_permutations(:, 3) = [ lb, la, lc, ld, 2 ] 
+       quartet_permutations(:, 4) = [ lb, la, ld, lc, 3 ] 
+       quartet_permutations(:, 5) = [ lc, ld, la, lb, 4 ] 
+       quartet_permutations(:, 6) = [ ld, lc, la, lb, 5 ] 
+       quartet_permutations(:, 7) = [ lc, ld, lb, la, 6 ] 
+       quartet_permutations(:, 8) = [ ld, lc, lb, la, 7 ] 
+
+       num_quartet_permutations = 1
+       DO i = 2, 8
+          unique = .TRUE.
+          DO j = 1, num_quartet_permutations
+             IF (ALL(quartet_permutations(1:4, j) == quartet_permutations(1:4, i))) THEN
+                unique = .FALSE.
+                EXIT
+             END IF 
+          END DO
+          IF(unique) THEN
+             num_quartet_permutations = num_quartet_permutations + 1
+             quartet_permutations(:, num_quartet_permutations) = quartet_permutations(:, i)
+          END IF
+       END DO
+    END SUBROUTINE
+    
+    LOGICAL FUNCTION is_canonical(i, j, k, l)
+       INTEGER, INTENT(IN) :: i, j, k, l
+       is_canonical = (i .GE. j) .AND. (k .GE. l) .AND. &
+                      ((i + j .GE. k + l) .AND. ((i + j .NE. k + l) .OR. (i .LE. k))) 
+    END FUNCTION
+
+    SUBROUTINE generate_canonical_ids(l_max, canonical_idx, canonical_idx_inverse, n_canonical)
+        INTEGER,                                     INTENT(IN)  :: l_max
+        INTEGER, ALLOCATABLE, DIMENSION(:, :, :, :), INTENT(OUT) :: canonical_idx
+        INTEGER, ALLOCATABLE, DIMENSION(:, :),       INTENT(OUT) :: canonical_idx_inverse
+        INTEGER,                                     INTENT(OUT) :: n_canonical
+
+        n_canonical = LIBHERIC_NCO(l_max) * (LIBHERIC_NCO(l_max) + 1) / 2
+        ALLOCATE(canonical_idx(0:l_max, 0:l_max, 0:l_max, 0:l_max))
+        ALLOCATE(canonical_idx_inverse(n_canonical, 4))
+      
+        canonical_idx = -1
+        canonical_idx_inverse = -1
+        init_canonical_idx: BLOCK
+        INTEGER :: i, j, k, l, ctr
+        ctr = 0
+        DO i = 0, l_max
+           DO j = 0, l_max
+              DO k = 0, l_max
+                 DO l = 0, l_max
+                    IF (is_canonical(i, j, k, l) .EQV. .TRUE.) THEN
+                       ctr = ctr + 1
+                       canonical_idx(i, j, k, l) = ctr
+                       canonical_idx(j, i, k, l) = ctr
+                       canonical_idx(i, j, l, k) = ctr
+                       canonical_idx(j, i, l, k) = ctr
+                       canonical_idx(k, l, i, j) = ctr
+                       canonical_idx(l, k, i, j) = ctr
+                       canonical_idx(k, l, j, i) = ctr
+                       canonical_idx(l, k, j, i) = ctr
+
+                       canonical_idx_inverse(ctr, :) = (/i, j, k, l/)
+                    END IF
+                 END DO
+              END DO
+           END DO
+        END DO
+        END BLOCK init_canonical_idx
+    END SUBROUTINE
+
+END MODULE libheric_interface
