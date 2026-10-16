@@ -1,6 +1,6 @@
 MODULE libheric_interface
    
-   USE ISO_C_BINDING, ONLY: C_CHAR, C_INT, C_DOUBLE, C_PTR, C_NULL_CHAR
+   USE ISO_C_BINDING, ONLY: C_BOOL, C_CHAR, C_DOUBLE, C_INT, C_INT8_T, C_INT64_T, C_NULL_CHAR, C_LONG_LONG, C_PTR, C_F_POINTER
     
    IMPLICIT NONE
    INTEGER, PARAMETER :: LIBHERIC_MAX_AM = @MAX_AM@
@@ -9,6 +9,9 @@ MODULE libheric_interface
    INTEGER, PARAMETER :: LIBHERIC_MAX_DEVICES_ON_NODE = @MAX_DEVICES_ON_NODE@
    INTEGER, PARAMETER, DIMENSION(0:LIBHERIC_AM_LIMIT) :: LIBHERIC_NCO = [ 1, 3, 6, 10, 15, 21, 28, 36, 45 ]
    INTEGER, PARAMETER, DIMENSION(0:LIBHERIC_AM_LIMIT) :: LIBHERIC_NSO = [ 1, 3, 5,  7,  9, 11, 13, 15, 17 ]
+
+   INTEGER, PARAMETER :: LIBHERIC_POTENTIAL_OPERATOR_COULOMB = 1
+   INTEGER, PARAMETER :: LIBHERIC_POTENTIAL_OPERATOR_SHORT_RANGE = 2
 
    TYPE acc_kind
        CHARACTER(kind=C_CHAR, len=LIBHERIC_FSTR_LEN) :: name
@@ -20,33 +23,55 @@ MODULE libheric_interface
        CHARACTER(kind=C_CHAR, len=LIBHERIC_FSTR_LEN) :: name
        CHARACTER(kind=C_CHAR, len=LIBHERIC_FSTR_LEN) :: bdf
        CHARACTER(kind=C_CHAR, len=LIBHERIC_FSTR_LEN) :: cpu_name
-       INTEGER                                           :: num_cores
-       TYPE(acc_kind)                                    :: kind
+       INTEGER                                       :: num_cores
+       TYPE(acc_kind)                                :: kind
    END TYPE
 
-   PUBLIC :: LIBHERIC_FSTR_LEN, &
+   TYPE atom_quartet_type
+       INTEGER                                     :: quartet_id(4)
+       REAL(C_DOUBLE), DIMENSION(:, :), POINTER    :: integrals
+       INTEGER(C_INT8_T), DIMENSION(:, :), POINTER :: shellset_ids
+   END TYPE
+
+   PUBLIC :: LIBHERIC_MAX_AM, &
+             LIBHERIC_FSTR_LEN, &
              LIBHERIC_MAX_DEVICES_ON_NODE, &
              acc_kind, &
              acc_device, &
+             atom_quartet_type, &
+             libheric_initialize, &
+             libheric_release, &
              query_accelerator_devices, &
-             create_accelerator_context, &
-             free_accelerator_context, &
-             accelerator_context_functional, &
-             accelerator_context_set_quartet, &
-             accelerator_context_set_quartet_permutation, &
-             accelerator_context_set_atom_id, &
-             accelerator_context_set_set_id, &
-             accelerator_context_set_shell_id, &
-             accelerator_context_set_exponent_id, &
-             accelerator_context_set_offset, &
+             create_accelerator_contexts, &
+             free_accelerator_contexts, &
+             accelerator_context_is_functional, &
+             accelerator_context_set_potential_operator, &
+             accelerator_context_set_quartet_class, &
+             accelerator_context_set_atom_ids, &
+             accelerator_context_set_B_offset, &
+             accelerator_context_set_D_offset, &
+             accelerator_context_set_Q_offset, &
+             accelerator_context_set_set_ids, &
+             accelerator_context_set_shell_ids, &
+             accelerator_context_set_exponent_ids, &
              accelerator_context_submit_peri, &
-             accelerator_context_submit_ceri, &
-             accelerator_context_get_next_ceri, &
-             generate_quartet_permutations, &
+             accelerator_context_get_next_staged_atom_quartet, &
+             accelerator_context_prefetch_cached_atom_quartet, &
+             accelerator_context_finish_quartet_class, &
+             accelerator_context_update_positions, &
+             accelerator_context_update_cell, &
+             optimize_screening_function, &
+             flush_logger, &
              generate_canonical_ids, &
              pc2_hide_acl
 
    INTERFACE
+      LOGICAL(C_BOOL) FUNCTION libheric_initialize(mpi_rank) bind(C, name="libheric_initialize")
+         IMPORT C_INT, C_BOOL
+         INTEGER(C_INT), VALUE :: mpi_rank
+      END FUNCTION libheric_initialize
+      SUBROUTINE libheric_release() bind(C, name="libheric_release")
+      END SUBROUTINE libheric_release
       SUBROUTINE get_accelerator_devices(packed_kinds, num_kinds, packed_devices, num_devices) &
           bind(C, name="get_accelerator_devices")
          IMPORT C_CHAR, C_INT
@@ -55,43 +80,57 @@ MODULE libheric_interface
          CHARACTER(kind=C_CHAR) :: packed_devices(*)
          INTEGER(C_INT)         :: num_devices
       END SUBROUTINE get_accelerator_devices
-      SUBROUTINE alloc_accelerator_context(ctx, &
-                                           packed_device, &
-                                           raw_cell_mat, &
-                                           raw_positions, raw_kinds,         num_positions, &
-                                           raw_exponents,                    num_exponents, &
-                                           raw_coefficients,                 num_shells, &
-                                           raw_kind_offsets, raw_kind_sizes, num_kinds, &
-                                           raw_set_offsets, raw_set_sizes,   max_sets, &
-                                           raw_shell_offsets, raw_shell_sizes) &
-                                           bind(C, name="alloc_accelerator_context")
-         IMPORT C_CHAR, C_INT, C_PTR, C_DOUBLE
-         TYPE(C_PTR)            :: ctx
-         CHARACTER(kind=C_CHAR) :: packed_device(*)
-         REAL(C_DOUBLE)         :: raw_cell_mat
-         REAL(C_DOUBLE)         :: raw_positions
-         INTEGER(C_INT)         :: raw_kinds
-         INTEGER(C_INT), VALUE  :: num_positions
-         REAL(C_DOUBLE)         :: raw_exponents
-         INTEGER(C_INT), VALUE  :: num_exponents
-         REAL(C_DOUBLE)         :: raw_coefficients
-         INTEGER(C_INT), VALUE  :: num_shells
-         INTEGER(C_INT)         :: raw_kind_offsets, raw_kind_sizes
-         INTEGER(C_INT), VALUE  :: num_kinds
-         INTEGER(C_INT)         :: raw_set_offsets, raw_set_sizes
-         INTEGER(C_INT), VALUE  :: max_sets
-         INTEGER(C_INT)         :: raw_shell_offsets, raw_shell_sizes
+      SUBROUTINE alloc_accelerator_contexts(ctx_handles, &
+                                            packed_device, &
+                                            num_contexts, &
+                                            mem_available, &
+                                            compute_raw_cartesian, &
+                                            raw_cell_mat, &
+                                            raw_positions, raw_kinds,         num_positions, &
+                                            raw_exponents,                    num_exponents, &
+                                            raw_coefficients,                 num_coefficients, &
+                                            raw_kind_nset, num_kinds, l_max, &
+                                            raw_set_nexp, max_sets, &
+                                            raw_set_nshl) &
+                                            bind(C, name="alloc_accelerator_contexts")
+         IMPORT C_BOOL, C_CHAR, C_INT, C_PTR, C_DOUBLE, C_LONG_LONG
+         TYPE(C_PTR)                 :: ctx_handles
+         CHARACTER(kind=C_CHAR)      :: packed_device(*)
+         INTEGER(C_INT), VALUE       :: num_contexts
+         INTEGER(C_LONG_LONG), VALUE :: mem_available 
+         LOGICAL(C_BOOL), VALUE      :: compute_raw_cartesian
+         REAL(C_DOUBLE)              :: raw_cell_mat
+         REAL(C_DOUBLE)              :: raw_positions
+         INTEGER(C_INT)              :: raw_kinds
+         INTEGER(C_INT), VALUE       :: num_positions
+         REAL(C_DOUBLE)              :: raw_exponents
+         INTEGER(C_INT), VALUE       :: num_exponents
+         REAL(C_DOUBLE)              :: raw_coefficients
+         INTEGER(C_INT), VALUE       :: num_coefficients
+         INTEGER(C_INT)              :: raw_kind_nset
+         INTEGER(C_INT), VALUE       :: num_kinds
+         INTEGER(C_INT), VALUE       :: l_max
+         INTEGER(C_INT)              :: raw_set_nexp
+         INTEGER(C_INT), VALUE       :: max_sets
+         INTEGER(C_INT)              :: raw_set_nshl
       END SUBROUTINE
-      SUBROUTINE free_accelerator_context(ctx) bind(C, name="free_accelerator_context")
-         IMPORT C_PTR
-         TYPE(C_PTR), VALUE     :: ctx
-      END SUBROUTINE
-      SUBROUTINE accelerator_context_functional(ctx, is_functional) bind(C, name="accelerator_context_functional")
+      SUBROUTINE free_accelerator_contexts(ctx_handles, num_contexts) bind(C, name="free_accelerator_contexts")
          IMPORT C_PTR, C_INT
-         TYPE(C_PTR), VALUE     :: ctx
-         INTEGER(C_INT)         :: is_functional
+         TYPE(C_PTR)           :: ctx_handles
+         INTEGER(C_INT), VALUE :: num_contexts
       END SUBROUTINE
-      SUBROUTINE accelerator_context_set_quartet(ctx, la, lb, lc, ld) bind(C, name="accelerator_context_set_quartet")
+      LOGICAL(C_BOOL) FUNCTION accelerator_context_is_functional(ctx) bind(C, name="accelerator_context_is_functional")
+         IMPORT C_PTR, C_BOOL
+         TYPE(C_PTR), VALUE     :: ctx
+      END FUNCTION
+      SUBROUTINE accelerator_context_set_potential_operator(ctx, op_id, op_param) &
+              bind(C, name="accelerator_context_set_potential_operator")
+         IMPORT C_PTR, C_INT, C_DOUBLE
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: op_id
+         REAL(C_DOUBLE), VALUE  :: op_param
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_set_quartet_class(ctx, la, lb, lc, ld) bind(C, name="accelerator_context_set_quartet_class")
          IMPORT C_PTR, C_INT
          TYPE(C_PTR), VALUE     :: ctx
          INTEGER(C_INT), VALUE  :: la
@@ -99,48 +138,53 @@ MODULE libheric_interface
          INTEGER(C_INT), VALUE  :: lc
          INTEGER(C_INT), VALUE  :: ld
       END SUBROUTINE
-      SUBROUTINE accelerator_context_set_quartet_permutation(ctx, perm) bind(C, name="accelerator_context_set_quartet_permutation")
+      SUBROUTINE accelerator_context_set_atom_ids(ctx, atom_a, atom_b, atom_c, atom_d) &
+             bind(C, name="accelerator_context_set_atom_ids")
          IMPORT C_PTR, C_INT
          TYPE(C_PTR), VALUE     :: ctx
-         INTEGER(C_INT), VALUE  :: perm
+         INTEGER(C_INT), VALUE  :: atom_a, atom_b, atom_c, atom_d
       END SUBROUTINE
-      SUBROUTINE accelerator_context_set_atom_id(ctx, quartet_pos, atom_id) bind(C, name="accelerator_context_set_atom_id")
+      SUBROUTINE accelerator_context_set_B_offset(ctx, off_x, off_y, off_z) bind(C, name="accelerator_context_set_B_offset")
          IMPORT C_PTR, C_INT
          TYPE(C_PTR), VALUE     :: ctx
-         INTEGER(C_INT), VALUE  :: quartet_pos
-         INTEGER(C_INT), VALUE  :: atom_id
-      END SUBROUTINE
-      SUBROUTINE accelerator_context_set_set_id(ctx, quartet_pos, set_id) bind(C, name="accelerator_context_set_set_id")
-         IMPORT C_PTR, C_INT
-         TYPE(C_PTR), VALUE     :: ctx
-         INTEGER(C_INT), VALUE  :: quartet_pos
-         INTEGER(C_INT), VALUE  :: set_id
-      END SUBROUTINE
-      SUBROUTINE accelerator_context_set_shell_id(ctx, quartet_pos, shell_id) bind(C, name="accelerator_context_set_shell_id")
-         IMPORT C_PTR, C_INT
-         TYPE(C_PTR), VALUE     :: ctx
-         INTEGER(C_INT), VALUE  :: quartet_pos
-         INTEGER(C_INT), VALUE  :: shell_id
-      END SUBROUTINE
-      SUBROUTINE accelerator_context_set_exponent_id(ctx, quartet_pos, exp_id) bind(C, name="accelerator_context_set_exponent_id")
-         IMPORT C_PTR, C_INT
-         TYPE(C_PTR), VALUE     :: ctx
-         INTEGER(C_INT), VALUE  :: quartet_pos
-         INTEGER(C_INT), VALUE  :: exp_id
-      END SUBROUTINE
-      SUBROUTINE accelerator_context_set_offset(ctx, off_pos, off_x, off_y, off_z) bind(C, name="accelerator_context_set_offset")
-         IMPORT C_PTR, C_INT
-         TYPE(C_PTR), VALUE     :: ctx
-         INTEGER(C_INT), VALUE  :: off_pos
          INTEGER(C_INT), VALUE  :: off_x
          INTEGER(C_INT), VALUE  :: off_y
          INTEGER(C_INT), VALUE  :: off_z
       END SUBROUTINE
-      SUBROUTINE accelerator_context_submit_peri(ctx) bind(C, name="accelerator_context_submit_peri")
-         IMPORT C_PTR
+      SUBROUTINE accelerator_context_set_D_offset(ctx, off_x, off_y, off_z) bind(C, name="accelerator_context_set_D_offset")
+         IMPORT C_PTR, C_INT
          TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: off_x
+         INTEGER(C_INT), VALUE  :: off_y
+         INTEGER(C_INT), VALUE  :: off_z
       END SUBROUTINE
-      SUBROUTINE accelerator_context_submit_ceri(ctx) bind(C, name="accelerator_context_submit_ceri")
+      SUBROUTINE accelerator_context_set_Q_offset(ctx, off_x, off_y, off_z) bind(C, name="accelerator_context_set_Q_offset")
+         IMPORT C_PTR, C_INT
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: off_x
+         INTEGER(C_INT), VALUE  :: off_y
+         INTEGER(C_INT), VALUE  :: off_z
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_set_set_ids(ctx, set_a, set_b, set_c, set_d, pmax) &
+              bind(C, name="accelerator_context_set_set_ids")
+         IMPORT C_PTR, C_INT, C_DOUBLE
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: set_a, set_b, set_c, set_d
+         REAL(C_DOUBLE)         :: pmax 
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_set_shell_ids(ctx, shl_a, shl_b, shl_c, shl_d) &
+              bind(C, name="accelerator_context_set_shell_ids")
+         IMPORT C_PTR, C_INT
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: shl_a, shl_b, shl_c, shl_d
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_set_exponent_ids(ctx, exp_a, exp_b, exp_c, exp_d) &
+              bind(C, name="accelerator_context_set_exponent_ids")
+         IMPORT C_PTR, C_INT
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: exp_a, exp_b, exp_c, exp_d
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_submit_peri(ctx) bind(C, name="accelerator_context_submit_peri")
          IMPORT C_PTR
          TYPE(C_PTR), VALUE     :: ctx
       END SUBROUTINE
@@ -148,10 +192,59 @@ MODULE libheric_interface
          IMPORT C_PTR
          TYPE(C_PTR), VALUE     :: ctx
       END SUBROUTINE
-      SUBROUTINE accelerator_context_get_next_ceri(ctx, integral_buffer) bind(C, name="accelerator_context_get_next_ceri")
-         IMPORT C_PTR, C_DOUBLE
+      LOGICAL(C_BOOL) FUNCTION internal_accelerator_context_get_next_staged_atom_quartet(ctx, quartet_id, integral_buffer, &
+                                                                                         shellset_ids, n_shellset_quartets, &
+                                                                                         eris_per_shellset_quartet) &
+              bind(C, name="internal_accelerator_context_get_next_staged_atom_quartet")
+         IMPORT C_PTR, C_BOOL, C_INT, C_INT64_T
          TYPE(C_PTR), VALUE     :: ctx
-         REAL(C_DOUBLE)         :: integral_buffer
+         INTEGER(C_INT)         :: quartet_id
+         TYPE(C_PTR)            :: integral_buffer 
+         TYPE(C_PTR)            :: shellset_ids
+         INTEGER(C_INT64_T)     :: n_shellset_quartets
+         INTEGER(C_INT64_T)     :: eris_per_shellset_quartet
+      END FUNCTION
+      LOGICAL(C_BOOL) FUNCTION accelerator_context_prefetch_cached_atom_quartet(ctx, A, B, C, D) &
+              bind(C, name="accelerator_context_prefetch_cached_atom_quartet")
+         IMPORT C_PTR, C_BOOL, C_INT
+         TYPE(C_PTR), VALUE     :: ctx
+         INTEGER(C_INT), VALUE  :: A, B, C, D
+      END FUNCTION
+      SUBROUTINE accelerator_context_update_positions(ctx, raw_positions, num_positions) & 
+              bind(C, name="accelerator_context_update_positions")
+         IMPORT C_PTR, C_INT, C_DOUBLE
+         TYPE(C_PTR), VALUE    :: ctx
+         REAL(C_DOUBLE)        :: raw_positions
+         INTEGER(C_INT), VALUE :: num_positions
+      END SUBROUTINE
+      SUBROUTINE accelerator_context_update_cell(ctx, raw_cell_mat) & 
+              bind(C, name="accelerator_context_update_cell")
+         IMPORT C_PTR, C_INT, C_DOUBLE
+         TYPE(C_PTR), VALUE    :: ctx
+         REAL(C_DOUBLE)        :: raw_cell_mat
+      END SUBROUTINE
+      SUBROUTINE compute_single_quartet(op_id, op_param, la, lb, lc, ld, pos_A, pos_B, pos_C, pos_D, &
+                                        alpha, beta, gamma, delta, quartet) &
+              bind(C, name="compute_single_quartet")
+         IMPORT C_INT, C_DOUBLE
+         INTEGER(C_INT), VALUE :: op_id
+         REAL(C_DOUBLE), VALUE :: op_param
+         INTEGER(C_INT), VALUE :: la, lb, lc, ld
+         REAL(C_DOUBLE)        :: pos_A, pos_B, pos_C, pos_D
+         REAL(C_DOUBLE), VALUE :: alpha, beta, gamma, delta
+         REAL(C_DOUBLE)        :: quartet
+      END SUBROUTINE
+      SUBROUTINE optimize_screening_function(x_data, y_data, n_data, y_cutoff, model, n_model) &
+              bind(C, name="optimize_screening_function")
+         IMPORT C_DOUBLE, C_INT
+         REAL(C_DOUBLE)         :: x_data
+         REAL(C_DOUBLE)         :: y_data
+         INTEGER(C_INT)         :: n_data
+         REAL(C_DOUBLE), VALUE  :: y_cutoff
+         REAL(C_DOUBLE)         :: model
+         INTEGER(C_INT), VALUE  :: n_model
+      END SUBROUTINE
+      SUBROUTINE flush_logger() bind(C, name="flush_logger")
       END SUBROUTINE
       SUBROUTINE pc2_hide_acl() bind(C, name="pc2_hide_acl")
       END SUBROUTINE 
@@ -270,77 +363,47 @@ CONTAINS
 
     END SUBROUTINE
 
-    SUBROUTINE create_accelerator_context(ctx, dev, &
-                                          cell_mat, &
-                                          positions, kinds,         &
-                                          exponents,                &
-                                          coefficients,             &
-                                          kind_offsets, kind_sizes, &
-                                          set_offsets, set_sizes,   &
-                                          shell_offsets, shell_sizes) 
-        TYPE(C_PTR), INTENT(OUT)                                                :: ctx
+    SUBROUTINE create_accelerator_contexts(ctx_handles, dev, &
+                                           num_contexts, &
+                                           mem_available, &
+                                           compute_raw_cartesian, &
+                                           cell_mat, &
+                                           positions, kinds,         &
+                                           exponents,                &
+                                           coefficients,             &
+                                           kind_nset, &
+                                           set_nexp,   &
+                                           set_nshl) 
+        TYPE(C_PTR), INTENT(INOUT)                                              :: ctx_handles
         TYPE(acc_device), INTENT(IN)                                            :: dev
+        INTEGER(C_INT),                                             INTENT(IN)  :: num_contexts
+        INTEGER(C_LONG_LONG),                                       INTENT(IN)  :: mem_available
+        LOGICAL(C_BOOL),                                            INTENT(IN)  :: compute_raw_cartesian
         REAL(C_DOUBLE), DIMENSION(3, 3),                            INTENT(IN)  :: cell_mat
         REAL(C_DOUBLE), DIMENSION(:, :),                CONTIGUOUS, INTENT(IN)  :: positions
         INTEGER(C_INT), DIMENSION(:),                   CONTIGUOUS, INTENT(IN)  :: kinds
         REAL(C_DOUBLE), DIMENSION(:),                   CONTIGUOUS, INTENT(IN)  :: exponents    
-        REAL(C_DOUBLE), DIMENSION(:, :),                CONTIGUOUS, INTENT(IN)  :: coefficients
-        INTEGER(C_INT), DIMENSION(:),                   CONTIGUOUS, INTENT(IN)  :: kind_offsets, kind_sizes 
-        INTEGER(C_INT), DIMENSION(:, :),                CONTIGUOUS, INTENT(IN)  :: set_offsets, set_sizes 
-        INTEGER(C_INT), DIMENSION(LIBHERIC_MAX_AM + 1),             INTENT(IN)  :: shell_offsets, shell_sizes     
+        REAL(C_DOUBLE), DIMENSION(:),                   CONTIGUOUS, INTENT(IN)  :: coefficients
+        INTEGER(C_INT), DIMENSION(:, :),                CONTIGUOUS, INTENT(IN)  :: kind_nset
+        INTEGER(C_INT), DIMENSION(:, :, :),             CONTIGUOUS, INTENT(IN)  :: set_nexp 
+        INTEGER(C_INT), DIMENSION(:, :, :),             CONTIGUOUS, INTENT(IN)  :: set_nshl
 
         CHARACTER(kind=C_CHAR, len=:), ALLOCATABLE  :: packed_device
 
         CALL pack_devices([dev], packed_device)
-        CALL alloc_accelerator_context(ctx, &
-                                       packed_device, &
-                                       cell_mat(1, 1), &
-                                       positions(1, 1), kinds(1), SIZE(positions, 2), &
-                                       exponents(1), SIZE(exponents, 1), &
-                                       coefficients(1, 1), SIZE(coefficients, 2), & 
-                                       kind_offsets(1), kind_sizes(1), SIZE(kind_offsets, 1), &
-                                       set_offsets(1, 1), set_sizes(1, 1), SIZE(set_offsets, 1), &
-                                       shell_offsets(1), shell_sizes(1))
+        CALL alloc_accelerator_contexts(ctx_handles, &
+                                        packed_device, &
+                                        num_contexts, &
+                                        mem_available, &
+                                        compute_raw_cartesian, &
+                                        cell_mat(1, 1), &
+                                        positions(1, 1), kinds(1), SIZE(positions, 2), &
+                                        exponents(1), SIZE(exponents, 1), &
+                                        coefficients(1), SIZE(coefficients, 1), & 
+                                        kind_nset(1, 1), SIZE(kind_nset, 1), SIZE(kind_nset, 2) - 1, &
+                                        set_nexp(1, 1, 1), SIZE(set_nexp, 1), &
+                                        set_nshl(1, 1, 1))
 
-    END SUBROUTINE
-
-    SUBROUTINE generate_quartet_permutations(quartet, quartet_permutations, num_quartet_permutations)
-
-       INTEGER, INTENT(IN)   :: quartet(4)
-       INTEGER, INTENT(OUT)  :: quartet_permutations(5, 8)
-       INTEGER, INTENT(OUT)  :: num_quartet_permutations
-       LOGICAL               :: unique
-       INTEGER               :: la, lb, lc, ld
-       INTEGER               :: i, j
-
-       la = quartet(1)
-       lb = quartet(2)
-       lc = quartet(3)
-       ld = quartet(4)
-
-       quartet_permutations(:, 1) = [ la, lb, lc, ld, 0 ]  
-       quartet_permutations(:, 2) = [ la, lb, ld, lc, 1 ] 
-       quartet_permutations(:, 3) = [ lb, la, lc, ld, 2 ] 
-       quartet_permutations(:, 4) = [ lb, la, ld, lc, 3 ] 
-       quartet_permutations(:, 5) = [ lc, ld, la, lb, 4 ] 
-       quartet_permutations(:, 6) = [ ld, lc, la, lb, 5 ] 
-       quartet_permutations(:, 7) = [ lc, ld, lb, la, 6 ] 
-       quartet_permutations(:, 8) = [ ld, lc, lb, la, 7 ] 
-
-       num_quartet_permutations = 1
-       DO i = 2, 8
-          unique = .TRUE.
-          DO j = 1, num_quartet_permutations
-             IF (ALL(quartet_permutations(1:4, j) == quartet_permutations(1:4, i))) THEN
-                unique = .FALSE.
-                EXIT
-             END IF 
-          END DO
-          IF(unique) THEN
-             num_quartet_permutations = num_quartet_permutations + 1
-             quartet_permutations(:, num_quartet_permutations) = quartet_permutations(:, i)
-          END IF
-       END DO
     END SUBROUTINE
     
     LOGICAL FUNCTION is_canonical(i, j, k, l)
@@ -387,5 +450,22 @@ CONTAINS
         END DO
         END BLOCK init_canonical_idx
     END SUBROUTINE
+
+    LOGICAL(C_BOOL) FUNCTION accelerator_context_get_next_staged_atom_quartet(ctx, atom_quartet) RESULT(quartet_available)
+        TYPE(C_PTR), VALUE                   :: ctx 
+        TYPE(atom_quartet_type), INTENT(OUT) :: atom_quartet
+
+        TYPE(C_PTR)                          :: tmp_integral_buffer, tmp_shellset_ids
+        INTEGER(C_INT64_T)                   :: n_shellset_quartets, eris_allocated_per_shellset 
+
+        quartet_available = internal_accelerator_context_get_next_staged_atom_quartet(ctx, atom_quartet%quartet_id(1), &
+                                                                                      tmp_integral_buffer, tmp_shellset_ids, &
+                                                                                      n_shellset_quartets, &
+                                                                                      eris_allocated_per_shellset)
+        IF(quartet_available) THEN
+           CALL C_F_POINTER(tmp_integral_buffer, atom_quartet%integrals,    [eris_allocated_per_shellset, n_shellset_quartets])
+           CALL C_F_POINTER(tmp_shellset_ids,    atom_quartet%shellset_ids, [INT(8, kind=C_INT64_T), n_shellset_quartets])
+        END IF
+    END FUNCTION 
 
 END MODULE libheric_interface

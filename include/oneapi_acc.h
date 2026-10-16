@@ -1,34 +1,43 @@
 #ifndef __LIBHERIC_ONEAPI_ACC_H__
 #define __LIBHERIC_ONEAPI_ACC_H__
 
-#include "default_acc.h"
+#include <abstract_acc.h>
+
 #include <optional>
 #include <queue>
 #include <semaphore>
 #include <vector>
+#ifdef ENABLE_ONEAPI
 #include <sycl/CL/sycl.hpp>
-#include <avx2/avx2_decompress.h>
-#include <scalar/scalar_decompress.h>
+#endif
+//#include <avx2/avx2_decompress.h>
+//#include <scalar/scalar_decompress.h>
+
+
 
 namespace libheric
 {
     std::vector<acc_device> discover_oneapi_accelerators(const acc_kind& acc_query); 
-
-    class oneapi_acc_context : public acc_context
+#ifdef ENABLE_ONEAPI
+    class oneapi_acc_context : public abstract_acc_context
     {
     public:
         oneapi_acc_context(const acc_device& acc_dev, 
-                           const simulation_box& sim_box); 
+                           const simulation_box& sim_box,
+                           uint32_t num_contexts,
+                           uint64_t mem_available,
+                           bool compute_raw_cartesian,
+                           abstract_acc_context* master_ctx);
         virtual ~oneapi_acc_context();
-        virtual void set_quartet(int la, int lb, int lc, int ld);
+        virtual void set_quartet(int la, int lb, int lc, int ld,
+                                 int64_t max_prim_per_contr, 
+                                 int64_t max_contr_per_quartet)
         virtual void set_quartet_permutation(int perm);
         virtual void set_atom_id(int quartet_pos, int atom_id);
         virtual void set_exponent_id(int quartet_pos, int exp_id);
         virtual void set_offset(int off_pos, int off_x, int off_y, int off_z);
         virtual void submit_peri();
-        virtual void submit_ceri();
         virtual void finish_quartet_class();
-        virtual void get_next_ceri(double* integral_buffer);
 
     private:
         std::optional<sycl::device> dev;
@@ -61,10 +70,6 @@ namespace libheric
         uint8_t* dev_eri_c[2];
         float* dev_eps[2];
 
-        double norm_prefactor;
-        double norm_coeffs[4];
-
-
         rtwt_container<double> rtwt_tmpl;
         std::vector<quartet_input<float>> input_quartets[2];
         std::vector<rtwt_container<float>> input_rtwt[2];
@@ -86,12 +91,28 @@ namespace libheric
 
         decompress::AVX2Decompressor<16> decomp;
         decompress::ScalarDecompressor<16> sdecomp;
-        std::queue<std::vector<double>> libint_maxl_ref;
-        std::queue<std::vector<double>> libint_unit_ref;
-        std::queue<std::vector<double>> libint2_ref;
         std::queue<std::vector<double>> rys_ref;
-
+        
+        oneapi_acc_context* master_ctx;
     };
+#else 
+    class oneapi_acc_context : public abstract_acc_context 
+    {
+    public:
+        oneapi_acc_context(const acc_device& acc_dev, 
+                           const simulation_box& sim_box,
+                           uint32_t num_contexts,
+                           uint64_t mem_available,
+                           bool compute_raw_cartesian,
+                           abstract_acc_context* master_ctx);
+        virtual ~oneapi_acc_context();
+        virtual void set_B_offset(int off_x, int off_y, int off_z) override;
+        virtual void set_D_offset(int off_x, int off_y, int off_z) override;
+        virtual void set_exponent_ids(int exp_a, int exp_b, int exp_c, int exp_d) override;
+        virtual void set_Q_offset(int off_x, int off_y, int off_z) override;
+        virtual void submit_peri() override;
+    };
+#endif 
 }
 
 #endif

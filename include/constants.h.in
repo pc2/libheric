@@ -5,10 +5,11 @@
 #define LIBHERIC_VERSION_MINOR @PROJECT_VERSION_MINOR@
 #define LIBHERIC_VERSION_STR "@PROJECT_VERSION@"
 
-#include<string>
 #include<cmath>
 #include<cstdint>
+#include<map>
 #include<numbers>
+#include<string>
 
 
 
@@ -18,18 +19,33 @@ namespace libheric {
     constexpr int MAX_DEVICES_ON_NODE = @MAX_DEVICES_ON_NODE@;
     constexpr int MAX_SET_SIZE = @MAX_SET_SIZE@;
     constexpr int QUARTET_SIZE = 4;
-    constexpr int NUM_PERMS = 8; // Number of quartet permutations 
+    constexpr int NUM_PERMS = 8; // Number of quartet permutations
+
+    constexpr bool LOG_PRINT = @LOG_PRINT@;
+    constexpr bool DEBUG_PRINT = @DEBUG_PRINT@;
+
     constexpr std::string perm_strs[NUM_PERMS] = {"abcd", "abdc", "bacd", "badc", 
                                                   "cdab", "dcab", "cdba", "dcba" };
     constexpr std::string spdf = "spdfghijkl";
     constexpr uint64_t nco[spdf.size()] = {1, 3, 6, 10, 15, 21, 28, 36, 45, 55};
     constexpr uint64_t nso[spdf.size()] = {1, 3, 5,  7,  9, 11, 13, 15, 17, 19};
 
+    constexpr double two_pi = 2.0 * std::numbers::pi;
     constexpr double two_over_pi = 2.0 / std::numbers::pi;
     constexpr double two_pi_52 = 2.0*std::pow(std::numbers::pi, 5.0/2.0);
     constexpr double dfac[spdf.size()] = {1.0, 1.0, 2.0, 3.0, 8.0, 15.0, 48.0, 105.0, 384.0, 945.0};
 
+    enum class potential_operator
+    {
+        invalid,
+        coulomb,
+        short_range
+    };
+
+
+
     static_assert(MAX_AM >= 0 && MAX_AM < spdf.size(), "Bad value for libheric::MAX_AM");
+    static_assert(!DEBUG_PRINT || LOG_PRINT, "DEBUG_PRINT must imply LOG_PRINT");
 }
 
 #endif

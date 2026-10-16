@@ -1,9 +1,9 @@
-#include "oneapi_acc.h"
+#include <oneapi_acc.h>
 
-#include "constants.h"
-#include "math_util.h"
-#include "transform.h"
-#include "util.h"
+#include <constants.h>
+#include <math_util.h>
+#include <transform.h>
+#include <util.h>
 
 #include <algorithm>
 #include <cctype>
@@ -14,540 +14,27 @@
 #include <thread>
 #include <utility>
 
+#ifdef ENABLE_ONEAPI
 #include <sycl/sycl.hpp>
 #include <sycl/ext/intel/fpga_extensions.hpp>
+#endif
 
 #include <dlfcn.h>
 
-extern "C" {
-#include <rys_roots.h>
-}
+//extern "C" {
+//#include <rys_roots.h>
+//}
 
-#include <libint2.h>
-#include <libint2.hpp>
-#include <libint2/boys.h>
 
 namespace libheric
 {
-    template<typename FLOAT, size_t VEC_SIZE>
-    void print_vector(const char* v_name, const std::array<FLOAT, VEC_SIZE>& v)
-    {
-        printf("%s = [", v_name);
-        for(uint32_t i = 0;i < v.size()-1;i++)
-        {
-            printf("%f, ", v[i]);
-        }
-        printf("%f]\n", v[v.size()-1]);
-    }
-    template<typename FLOAT>
-    std::vector<FLOAT> rys_quadrature(const am_container& am, quartet_input<double> input_quartet, rtwt_container<double> rtwt)
-    {
-        static_assert(std::is_floating_point<FLOAT>::value, "[ERROR] rys_quadrature can only be instantiated with floating point types");
-        uint32_t len_a = am.a() + 1;
-        uint32_t len_b = am.b() + 1;
-        uint32_t len_c = am.c() + 1;
-        uint32_t len_d = am.d() + 1;
 
-        uint32_t am_n = am.a() + am.b();
-        uint32_t am_m = am.c() + am.d();
-        uint32_t len_m = am_m + 1;
-        uint32_t len_n = am_n + 1;
-
-        uint32_t num_rys = (am_n + am_m) / 2 + 1;
-
-        constexpr uint32_t EXP = 3;
-        constexpr uint32_t NUM_COORDINATES = 3;
-
-
-        constexpr uint32_t RYS_ORDER_MAX = 8;
-        if(num_rys > RYS_ORDER_MAX)
-        {
-            std::cout << "[ERROR] Maximum number of Rys roots support is " << RYS_ORDER_MAX << ", but " << num_rys << " are required for quarted (" << am.a() << am.b() << "|" << am.c() << am.d() << ")\n";
-            exit(1);
-        }
-
-
-        double normalization_factor = 1.0f;
-        for(uint32_t i = 0;i < 4;i++)
-        {
-            double term1 = std::sqrt(std::sqrt(std::pow(2.0 * input_quartet.raw[i * 4 + EXP]/std::numbers::pi, 3.0)) * std::pow(4.0 * input_quartet.raw[i * 4 + EXP], am.raw[i]));
-            double term2 = std::sqrt(double(factorial(am.raw[i]))/double(factorial(2*am.raw[i])) * std::pow(2.0, am.raw[i]));
-            //std::cout << "term1 = " << term1 << '\n';
-            //std::cout << "term2 = " << term2 << '\n';
-            normalization_factor *= term1 * term2;
-        }
-
-        double zeta = input_quartet.raw[0 * 4 + EXP] + input_quartet.raw[1 * 4 + EXP];
-        double eta  = input_quartet.raw[2 * 4 + EXP] + input_quartet.raw[3 * 4 + EXP];
-        double rho  = zeta * eta / (zeta + eta);
-
-        double P[3], Q[3], AB[3], CD[3], PA[3], QC[3], PQ[3];
-        FLOAT kappa = 0.0f;
-        for(uint32_t i = 0;i < 3;i++)
-        {
-            P[i] = (input_quartet.raw[0 * 4 + EXP] * input_quartet.raw[0 * 4 + i] + input_quartet.raw[1 * 4 + EXP] * input_quartet.raw[1 * 4 + i]) / zeta;
-            Q[i] = (input_quartet.raw[2 * 4 + EXP] * input_quartet.raw[2 * 4 + i] + input_quartet.raw[3 * 4 + EXP] * input_quartet.raw[3 * 4 + i]) / eta;
-            AB[i] = (input_quartet.raw[0 * 4 + i] - input_quartet.raw[1 * 4 + i]);
-            CD[i] = (input_quartet.raw[2 * 4 + i] - input_quartet.raw[3 * 4 + i]);
-            PA[i] = (P[i] - input_quartet.raw[0 * 4 + i]);
-            QC[i] = (Q[i] - input_quartet.raw[2 * 4 + i]);
-            PQ[i] = (P[i] - Q[i]);
-            kappa += (input_quartet.raw[0 * 4 + EXP] * input_quartet.raw[1 * 4 + EXP])/zeta * AB[i] * AB[i]
-                  +  (input_quartet.raw[2 * 4 + EXP] * input_quartet.raw[3 * 4 + EXP])/eta  * CD[i] * CD[i];
-        }
-        // printf("AB = [%+.8e, %+.8e, %+.8e, %+.8e]\n", AB[0], AB[1], AB[2], 0.0f);
-        // printf("CD = [%+.8e, %+.8e, %+.8e, %+.8e]\n", CD[0], CD[1], CD[2], 0.0f);
-        // printf("PA = [%+.8e, %+.8e, %+.8e, %+.8e]\n", PA[0], PA[1], PA[2], 0.0f);
-        // printf("QC = [%+.8e, %+.8e, %+.8e, %+.8e]\n", QC[0], QC[1], QC[2], 0.0f);
-        // printf("PQ = [%+.8e, %+.8e, %+.8e, %+.8e]\n", PQ[0], PQ[1], PQ[2], 0.0f);
-        
-        // printf("zeta = %f\n", zeta);
-        // printf("eta  = %f\n", eta);
-        // printf("chi  = %f\n", 1/(zeta + eta));
-
-        FLOAT prefactor = 2 * normalization_factor * std::pow(std::numbers::pi, 5.0/2.0) * std::sqrt(rho) * std::exp(-kappa) / std::pow(zeta * eta, 3.0/2.0);
-        //std::cout << "norm = " << normalization_factor << "\n";
-        //std::cout << "kappa = " << std::exp(-kappa) << '\n';
-        //std::cout << "rho = " << std::sqrt(rho) / std::pow(zeta * eta, 3.0/2.0) << '\n';
-        //std::cout << "kc = " << prefactor << "\n";
-        // std::cout << "prefactor = " << prefactor << '\n';
-        std::array<FLOAT, RYS_ORDER_MAX> prep_roots{};
-        std::array<FLOAT, RYS_ORDER_MAX> prep_weights{};
-
-        std::array<FLOAT, RYS_ORDER_MAX> B0{}, B1{}, B2{};
-        std::array<FLOAT, RYS_ORDER_MAX> C1[NUM_COORDINATES] = {{},{},{}}, C2[NUM_COORDINATES] = {{},{},{}};
-        FLOAT I_abcd[len_d][len_m][len_b][len_n][num_rys][NUM_COORDINATES];
-
-        for(uint32_t u = 0;u < num_rys;u++)
-        {
-            prep_roots[u] = FLOAT(rtwt.roots()[u] / (1.0 + rtwt.roots()[u])); // Transform u^2 -> t^2 (Somehow the rys_root/rys_weight routines in libcint/pyquante calculate u^2 s.t. u^2 = t^2/(1-t^2) and not u^2 = \rho t^2/(1-t^2), might explain the difference between the roots in libcchem and libcint?)
-            prep_weights[u] = FLOAT(std::cbrt(rtwt.weights()[u] * prefactor));
-
-
-            B0[u] = (FLOAT(1.0)/FLOAT(2.0)) * FLOAT(1.0)/(FLOAT(zeta) + FLOAT(eta)) * prep_roots[u];
-            B1[u] = (FLOAT(1.0)/(FLOAT(2.0) * FLOAT(zeta))) * (FLOAT(1.0) - FLOAT( eta)/(FLOAT(zeta) + FLOAT(eta)) * prep_roots[u]);
-            B2[u] = (FLOAT(1.0)/(FLOAT(2.0) * FLOAT( eta))) * (FLOAT(1.0) - FLOAT(zeta)/(FLOAT(zeta) + FLOAT(eta)) * prep_roots[u]);
-
-            for(uint32_t i = 0;i < NUM_COORDINATES;i++)
-            {
-                C1[i][u] = FLOAT(PA[i]) - (FLOAT( eta) * FLOAT(PQ[i]))/(FLOAT(eta) + FLOAT(zeta)) * prep_roots[u];
-                C2[i][u] = FLOAT(QC[i]) + (FLOAT(zeta) * FLOAT(PQ[i]))/(FLOAT(eta) + FLOAT(zeta)) * prep_roots[u];
-                I_abcd[0][0][0][0][u][i] = prep_weights[u];
-                // I_abcd[0][0][0][1][u][i] = C1[i][u] * I_abcd[0][0][0][0][u][i];
-                // I_abcd[0][1][0][0][u][i] = C2[i][u] * I_abcd[0][0][0][0][u][i];
-                // I_abcd[0][1][0][1][u][i] = B0[u]    * I_abcd[0][0][0][0][u][i] 
-                //                          + C1[i][u] * I_abcd[0][0][0][1][u][i];
-            }
-        }
-        std::cout << input_quartet << '\n'; 
-        std::cout << rtwt << '\n';
-            
-        // print_vector("B0", B0);
-        // print_vector("B1", B1);
-        // print_vector("B2", B2);
-
-        // print_vector("C1_x", C1[0]);
-        // print_vector("C1_y", C1[1]);
-        // print_vector("C1_z", C1[2]);
-        // print_vector("C2_x", C2[0]);
-        // print_vector("C2_y", C2[1]);
-        // print_vector("C2_z", C2[2]);
-
-
-
-        for(uint32_t n = 0;n < len_n-1;n++)
-        {
-            for(uint32_t u = 0;u < num_rys;u++)
-            {
-                for(uint32_t i = 0;i < 3;i++)
-                {
-                    uint32_t n0 = n == 0 ? 0 : n - 1;
-                    I_abcd[0][0][0][n+1][u][i] = n * B1[u] * I_abcd[0][0][0][n0][u][i] 
-                                               +  C1[i][u] * I_abcd[0][0][0][n ][u][i];
-                }
-            }
-        }
-
-        for(uint32_t m = 0;m < len_m-1;m++)
-        {
-            for(uint32_t u = 0;u < num_rys;u++)
-            {
-                for(uint32_t i = 0;i < 3;i++)
-                {
-                    uint32_t m0 = m == 0 ? 0 : m - 1;
-                    I_abcd[0][m+1][0][0][u][i] = m * B2[u] * I_abcd[0][m0][0][0][u][i] 
-                                               +  C2[i][u] * I_abcd[0][m ][0][0][u][i];
-                }
-            }
-        }
-
-        for(uint32_t m = 1;m < len_m;m++)
-        {
-            for(uint32_t n = 0;n < len_n-1;n++)
-            {
-                for(uint32_t u = 0;u < num_rys;u++)
-                {
-                    for(uint32_t i = 0;i < 3;i++)
-                    {
-                        uint32_t n0 = n == 0 ? 0 : n - 1;
-
-                        I_abcd[0][m][0][n+1][u][i] = m * B0[u] * I_abcd[0][m-1][0][n ][u][i] 
-                                                   + n * B1[u] * I_abcd[0][m  ][0][n0][u][i]
-                                                   +  C1[i][u] * I_abcd[0][m  ][0][n ][u][i];
-                    }
-                }
-            }
-        }
-
-
-        //for(uint32_t i = 0;i < NUM_COORDINATES;i++)
-        //{
-        //    // printf("coord = %u\n", i);
-        //    for(uint32_t m = 0;m < len_m;m++)
-        //    {
-        //        for(uint32_t n = 0;n < len_n;n++)
-        //        {
-        //            for(uint32_t u = 0;u < num_rys;u++)
-        //            {
-        //                uint32_t idx = idx = ((m * len_n + n) * num_rys + u) * NUM_COORDINATES + i;
-        //                vrr_ref[idx] = I_abcd[0][m][0][n][u][i];
-        //                // printf("vrr[m = %u][n = %u][u = %u] = %f\n", m, n, u, I_abcd[0][m  ][0][n  ][u][i]);
-        //            }
-        //            // printf("\n");
-        //        }
-        //        // printf("----------------------------------------------------------------\n");
-        //    }
-        //}
-
-        for(uint32_t m = 0;m < len_m;m++)
-        {
-            for(uint32_t b = 0;b < len_b-1;b++)
-            {
-                for(uint32_t a = 0;a < len_n-b-1;a++)
-                {
-                    for(uint32_t u = 0;u < num_rys;u++)
-                    {
-                        for(uint32_t i = 0;i < 3;i++)
-                        {
-                            I_abcd[0][m][b+1][a][u][i] = I_abcd[0][m][b][a+1][u][i]
-                                                       + AB[i] * I_abcd[0][m][b][a][u][i];
-                        }
-                    }
-                }
-            }
-        }
-
-        for(uint32_t d = 0;d < len_d-1;d++)
-        {
-            for(uint32_t c = 0;c < len_m-d-1;c++)
-            {
-                for(uint32_t b = 0;b < len_b;b++)
-                {
-                    for(uint32_t a = 0;a < len_a;a++)
-                    {
-                        for(uint32_t u = 0;u < num_rys;u++)
-                        {
-                            for(uint32_t i = 0;i < 3;i++)
-                            {
-                                I_abcd[d+1][c][b][a][u][i] = I_abcd[d][c+1][b][a][u][i]
-                                                           + CD[i] * I_abcd[d][c][b][a][u][i];
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        //for(uint32_t d = 0;d < len_d;d++)
-        //{
-        //    for(uint32_t c = 0;c < len_c;c++)
-        //    {
-        //        for(uint32_t b = 0;b < len_b;b++)
-        //        {
-        //            for(uint32_t a = 0;a < len_a;a++)
-        //            {
-        //                for(uint32_t u = 0;u < num_rys;u++)
-        //                {
-        //                    for(uint32_t i = 0;i < NUM_COORDINATES;i++)
-        //                    {
-        //                        uint32_t idx = ((((d * len_c + c) * len_b + b) * len_a + a) * num_rys + u) * NUM_COORDINATES + i;
-        //                        hrr_ref[idx] = I_abcd[d][c][b][a][u][i];
-        //                        //printf("hrr[%u][%u][%u][%u][%u][%u] = %f\n", d,c,b,a,u,i,I_abcd[d][c][b][a][u][i]);
-        //                    }
-        //                }
-        //            }
-        //        }
-        //    }
-        //}
-
-
-        std::vector<FLOAT> eris;
-
-        for(uint32_t d1 = 0;d1 < len_d;d1++)
-        {
-        for(uint32_t d2 = 0;d2 <= d1;d2++)
-        {
-            uint32_t dx = am.d() - d1;
-            uint32_t dy = d1 - d2;
-            uint32_t dz = d2;
-
-            for(uint32_t c1 = 0;c1 < len_c;c1++)
-            {
-            for(uint32_t c2 = 0;c2 <= c1;c2++)
-            {
-                uint32_t cx = am.c() - c1;
-                uint32_t cy = c1 - c2;
-                uint32_t cz = c2;
-
-                for(uint32_t b1 = 0;b1 < len_b;b1++)
-                {
-                for(uint32_t b2 = 0;b2 <= b1;b2++)
-                {
-                    uint32_t bx = am.b() - b1;
-                    uint32_t by = b1 - b2;
-                    uint32_t bz = b2;
-
-                    for(uint32_t a1 = 0;a1 < len_a;a1++)
-                    {
-                    for(uint32_t a2 = 0;a2 <= a1;a2++)
-                    {
-                        uint32_t ax = am.a() - a1;
-                        uint32_t ay = a1 - a2;
-                        uint32_t az = a2;
-
-                        FLOAT eri = 0.0f;
-                        // std::cout << "ax = " << ax << ", bx = " << bx << ", cx = " << cx << ", dx = " << dx << '\n';
-                        // std::cout << "ay = " << ay << ", by = " << by << ", cy = " << cy << ", dy = " << dy << '\n';
-                        // std::cout << "az = " << az << ", bz = " << bz << ", cz = " << cz << ", dz = " << dz << '\n';
-                        for(uint32_t u = 0;u < num_rys;u++)
-                        {
-                            // std::cout << "\t u = " << u 
-                            //           << ": I_abcd_x = " 
-                            //           << I_abcd[dx][cx][bx][ax][u][0] 
-                            //           << ", I_abcd_y = " 
-                            //           << I_abcd[dy][cy][by][ay][u][1] 
-                            //           << ", I_abcd_z = " 
-                            //           << I_abcd[dz][cz][bz][az][u][1] 
-                            //           << '\n';
-
-                            eri += I_abcd[dx][cx][bx][ax][u][0]
-                                 * I_abcd[dy][cy][by][ay][u][1]
-                                 * I_abcd[dz][cz][bz][az][u][2];
-                        }
-                        eris.push_back(eri);
-
-                    }
-                    }
-
-                }
-                }
-
-            }
-            }
-        }
-        }
-        return eris;
-    }
-
-    std::array<std::vector<double>, 3> libint_oshgp(uint32_t l_max, const am_container& am, quartet_input<double> q, int libint_perm)
-    {
-        Libint_eri_t lint_engine;
-        libint2_init_eri(&lint_engine, l_max, 0);
-
-        libint2::Engine eri_engine(libint2::Operator::coulomb, 1, l_max);
-        
-
-        libint2::Shell s_a = libint2::Shell({{q.alpha()}}, {{am.a(), true, {{1.0}}}}, {{q.A()(0), q.A()(1), q.A()(2)}});
-        libint2::Shell s_b = libint2::Shell({{q.beta() }}, {{am.b(), true, {{1.0}}}}, {{q.B()(0), q.B()(1), q.B()(2)}});
-        libint2::Shell s_c = libint2::Shell({{q.gamma()}}, {{am.c(), true, {{1.0}}}}, {{q.C()(0), q.C()(1), q.C()(2)}});
-        libint2::Shell s_d = libint2::Shell({{q.delta()}}, {{am.d(), true, {{1.0}}}}, {{q.D()(0), q.D()(1), q.D()(2)}});
-        
-        std::cout << s_a << s_b << s_c << s_d << '\n';
-        eri_engine.compute(s_a, s_b, s_c, s_d);
-        
-        std::vector<double> l2_res = permute_sph_quartet_scalar_double[7](eri_engine.results()[0], am);
-
-        am_container perm_am = am;
-        perm_am.apply_permutation(libint_perm);
-
-        double tgt_alpha = q.alpha();
-        double tgt_beta  = q.beta();
-        double tgt_gamma = q.gamma();
-        double tgt_delta = q.delta();
-
-        q.apply_permutation(libint_perm);
-        
-        std::cout << "Libint input:\n" << q << '\n';
-        std::cout << perm_am << '\n';
-
-        auto A = q.A();
-        auto B = q.B();
-        auto C = q.C();
-        auto D = q.D();
-
-        double alpha = q.alpha();
-        double beta  = q.beta(); 
-        double gamma = q.gamma();
-        double delta = q.delta();
-
-        double zeta = alpha + beta;
-        double eta  = gamma + delta;
-        double chi  = (zeta * eta) / (zeta + eta);
-
-        double P[3], Q[3], W[3], AB[3], CD[3], PA[3], QC[3], PQ[3], WP[3], WQ[3];
-        double AB2 = 0, CD2 = 0, PQ2 = 0;
-
-        for(int xyz = 0;xyz < 3;xyz++)
-        {
-            P[xyz] = (alpha * A[xyz] + beta  * B[xyz]) / zeta; 
-            Q[xyz] = (gamma * C[xyz] + delta * D[xyz]) / eta; 
-            W[xyz] = (zeta  * P[xyz] + eta   * Q[xyz]) / (zeta + eta); 
-            
-            AB[xyz] = A[xyz] - B[xyz];
-            CD[xyz] = C[xyz] - D[xyz];
-            PA[xyz] = P[xyz] - A[xyz];
-            QC[xyz] = Q[xyz] - C[xyz];
-            PQ[xyz] = P[xyz] - Q[xyz];
-            WP[xyz] = W[xyz] - P[xyz];
-            WQ[xyz] = W[xyz] - Q[xyz];
-
-            AB2 += AB[xyz] * AB[xyz];
-            CD2 += CD[xyz] * CD[xyz];
-            PQ2 += PQ[xyz] * PQ[xyz];
-        }
-        
-        lint_engine.AB_x[0] = AB[0]; 
-        lint_engine.AB_y[0] = AB[1]; 
-        lint_engine.AB_z[0] = AB[2]; 
-        
-        lint_engine.CD_x[0] = CD[0]; 
-        lint_engine.CD_y[0] = CD[1]; 
-        lint_engine.CD_z[0] = CD[2]; 
-
-        lint_engine.PA_x[0] = PA[0]; 
-        lint_engine.PA_y[0] = PA[1]; 
-        lint_engine.PA_z[0] = PA[2]; 
-                                          
-        lint_engine.QC_x[0] = QC[0]; 
-        lint_engine.QC_y[0] = QC[1]; 
-        lint_engine.QC_z[0] = QC[2]; 
-
-        lint_engine.WP_x[0] = WP[0]; 
-        lint_engine.WP_y[0] = WP[1]; 
-        lint_engine.WP_z[0] = WP[2]; 
-
-        lint_engine.WQ_x[0] = WQ[0]; 
-        lint_engine.WQ_y[0] = WQ[1]; 
-        lint_engine.WQ_z[0] = WQ[2]; 
-        
-        lint_engine.oo2z [0] = 1.0 / (2.0 * zeta); 
-        lint_engine.oo2e [0] = 1.0 / (2.0 *  eta); 
-        lint_engine.oo2ze[0] = 1.0 / (2.0 * (zeta + eta));
-        lint_engine.roz  [0] = chi / zeta; 
-        lint_engine.roe  [0] = chi /  eta;
-
-
-
-        lint_engine.contrdepth = 1;
-        
-        double kappa = std::exp(-((alpha * beta * AB2)/zeta + (gamma * delta * CD2)/eta));
-        double prefactor = 2.0 * std::pow(std::numbers::pi, 2.5) * kappa * std::sqrt(chi / (zeta * eta)) / (zeta * eta);
-        
-        uint32_t total_am = am.a() + am.b() + am.c() + am.d();
-        libint2::FmEval_Chebyshev7 fm_eval(total_am);
-        double X = PQ2 * chi;
-        double F[total_am + 1];
-        fm_eval.eval(F, X, total_am);
-        for(uint32_t i = 0;i <= total_am;i++)F[i] *= prefactor;
-        memcpy(&lint_engine.LIBINT_T_SS_EREP_SS(0)[0], F, (total_am + 1) * sizeof(double));
-        //std::cout << "Evaluated boys functions" << std::endl;
-        //std::cout << "Permuted am_a = " << am.a() << ", am_b = " << am.b() << ", am_c = " << am.c() << ", am_d = " << am.d() << std::endl;
-        //std::cout << "eri_fct_ptr = " << libint2_build_eri[am.a()][am.b()][am.c()][am.d()] << std::endl;
-        libint2_build_eri[perm_am.a()][perm_am.b()][perm_am.c()][perm_am.d()](&lint_engine);
-        double* results = lint_engine.targets[0];
-        //std::cout << "Compute ERIs with libint" << std::endl;
-
-        std::vector<double> maxl_eris;
-        std::vector<double> unit_eris;
-
-        uint32_t eri_ctr = 0;
-
-        double maxl_norm = 1.0;
-        double exps[4] = {alpha, beta, gamma, delta}; 
-        for(uint32_t i = 0;i < 4;i++)
-        {
-            double term1 = std::sqrt(std::sqrt(std::pow(2.0 * exps[i]/std::numbers::pi, 3.0)) * std::pow(4.0 * exps[i], perm_am.raw[i]));
-            double term2 = std::sqrt(double(factorial(perm_am.raw[i]))/double(factorial(2*perm_am.raw[i])) * std::pow(2.0, perm_am.raw[i]));
-            maxl_norm *= term1 * term2;
-        }
-        std::cout << '\n';
-
-        auto unit_norm_lambda = [](int32_t l, int32_t lx, int32_t ly, int32_t lz, double exp) {
-            double term1 = std::sqrt(std::sqrt(std::pow(2.0 * exp/std::numbers::pi, 3.0)) * std::pow(4.0 * exp, l));
-            double term2 = std::sqrt(dfac[std::max(2 * lx - 1, 0)] * dfac[std::max(2 * ly - 1, 0)] * dfac[std::max(2 * lz - 1, 0)]);
-            return term1 / term2;
-        };
-        
-        //libint integrals are stored "Row major", i.e. (a0b0|c0d0), (a0b0|c0d1), (a0b0|c0d2), ...
-        //while CP2K expects integral stored as "Column major", i.e. (a0b0|c0d0), (a1b0|c0d0), ...
-        int output_perm = libint_perm ^ 0x7;
-        std::vector<double> permuted_results = permute_cart_quartet_scalar_double[output_perm](results, am);
-
-        for(int32_t d1 = 0;d1 <= am.d();d1++)
-        {
-        for(int32_t d2 = 0;d2 <= d1;d2++)
-        {
-            int32_t dx = am.d() - d1;
-            int32_t dy = d1 - d2;
-            int32_t dz = d2;
-            double unit_norm_d = unit_norm_lambda(am.d(), dx, dy, dz, tgt_delta);
-            for(int32_t c1 = 0;c1 <= am.c();c1++)
-            {
-            for(int32_t c2 = 0;c2 <= c1;c2++)
-            {
-                int32_t cx = am.c() - c1;
-                int32_t cy = c1 - c2;
-                int32_t cz = c2;
-                double unit_norm_cd = unit_norm_d * unit_norm_lambda(am.c(), cx, cy, cz, tgt_gamma);
-
-                for(int32_t b1 = 0;b1 <= am.b();b1++)
-                {
-                for(int32_t b2 = 0;b2 <= b1;b2++)
-                {
-                    int32_t bx = am.b() - b1;
-                    int32_t by = b1 - b2;
-                    int32_t bz = b2;
-                    double unit_norm_bcd = unit_norm_cd * unit_norm_lambda(am.b(), bx, by, bz, tgt_beta);
-                    for(int32_t a1 = 0;a1 <= am.a();a1++)
-                    {
-                    for(int32_t a2 = 0;a2 <= a1;a2++)
-                    {
-                        int32_t ax = am.a() - a1;
-                        int32_t ay = a1 - a2;
-                        int32_t az = a2;
-                        double unit_norm_abcd = unit_norm_bcd * unit_norm_lambda(am.a(), ax, ay, az, tgt_alpha);
-
-                        maxl_eris.push_back(permuted_results[eri_ctr] * maxl_norm);
-                        unit_eris.push_back(permuted_results[eri_ctr] * unit_norm_abcd);
-
-                        eri_ctr++;
-                    }
-                    }
-                }
-                }
-            }
-            }
-        }
-        }
-        libint2_cleanup_eri(&lint_engine);
-        return {{maxl_eris, unit_eris, l2_res}}; 
-         
-    }
 
     std::vector<acc_device> discover_oneapi_accelerators(const acc_kind& acc_query) 
     {
         std::vector<acc_device> found_devices;
 
+#ifdef ENABLE_ONEAPI
         sycl::platform platform;
         try {
             platform = sycl::platform(sycl::ext::intel::fpga_selector_v);
@@ -578,18 +65,27 @@ namespace libheric
                 found_devices.push_back({dev_name, fake_dev_bdf, "", 1, acc_query});
             }
         }
+#endif
         return found_devices;
     }
 
+#ifdef ENABLE_ONEAPI
     oneapi_acc_context::oneapi_acc_context(const acc_device& acc_dev,
-                                           const simulation_box& sim_box)
-       : acc_context(acc_dev, sim_box), 
+                                           const simulation_box& sim_box,
+                                           uint32_t num_contexts,
+                                           uint64_t mem_available,
+                                           bool compute_raw_cartesian,
+                                           abstract_acc_context* master_ctx)
+       : abstract_acc_context(acc_dev, sim_box, num_contexts, mem_available, compute_raw_cartesian, master_ctx), 
          lib_handle(nullptr), kernel(nullptr),
 		 batch_size(0), cbits(0), n_rtwt(0), n512_per_quartet(0), 
-		  host_eri_d{nullptr, nullptr}, host_eri_c{nullptr, nullptr}, host_eps{nullptr, nullptr}, 
-		  dev_abcd{nullptr, nullptr}, dev_rtwt{nullptr, nullptr}, dev_eri_c{nullptr, nullptr}, dev_eps{nullptr, nullptr},
-          overwrite_quartet_batch{1}, start_consuming{0}
+		 host_eri_d{nullptr, nullptr}, host_eri_c{nullptr, nullptr}, host_eps{nullptr, nullptr}, 
+		 dev_abcd{nullptr, nullptr}, dev_rtwt{nullptr, nullptr}, dev_eri_c{nullptr, nullptr}, dev_eps{nullptr, nullptr},
+         overwrite_quartet_batch{1}, start_consuming{0}
     {
+        //this->accelerator_queue = new quartet_task_queue(num_contexts);
+        //quartet_tasks.emplace_back(DEFAULT_TASK_SIZE, &task_consumer_callback, &task_consumer_callback_mtx);
+
         // PC2 specific solution might/should be changed in the future!
         if(acc_dev.bdf != "0000:00:00.0" && acc_dev.bdf != "0000:00:01.0")
         {
@@ -636,9 +132,19 @@ namespace libheric
 
         this->ctx = sycl::context(this->dev.value());
         this->q = sycl::queue(this->ctx.value(), this->dev.value(), sycl::property::queue::enable_profiling{});
-        //libint2_static_init();
-        libint2::initialize();
     }
+    
+    //oneapi_acc_context::oneapi_acc_context(oneapi_acc_context* master_ctx)
+    //   : abstract_acc_context(master_ctx->acc_dev, master_ctx->sim_box), 
+    //     lib_handle(nullptr), kernel(nullptr),
+	//	 batch_size(0), cbits(0), n_rtwt(0), n512_per_quartet(0), 
+	//	 host_eri_d{nullptr, nullptr}, host_eri_c{nullptr, nullptr}, host_eps{nullptr, nullptr}, 
+	//	 dev_abcd{nullptr, nullptr}, dev_rtwt{nullptr, nullptr}, dev_eri_c{nullptr, nullptr}, dev_eps{nullptr, nullptr},
+    //     overwrite_quartet_batch{1}, start_consuming{0},
+    //     master_ctx(master_ctx)
+    //{
+
+    //}
 
     oneapi_acc_context::~oneapi_acc_context()
     {
@@ -661,22 +167,18 @@ namespace libheric
                 if(dev_eps[db]   != nullptr)sycl::free(dev_eps[db]  , this->q.value());
             }
         }
-        //libint2_static_cleanup();
-        libint2::finalize();
     }
 
-    void oneapi_acc_context::set_quartet(int la, int lb, int lc, int ld)
+    void oneapi_acc_context::set_quartet(int la, int lb, int lc, int ld, 
+                                         int64_t max_prim_per_contr, 
+                                         int64_t max_contr_per_quartet)
     {
         this->new_quartet_class_for_consume = true;
-        this->acc_context::set_quartet(la, lb, lc, ld);
-        this->norm_prefactor = 1.0 / std::sqrt(dfac[std::max(2 * am.a() - 1, 0)] // Avoid access to dfac[-1] for l=0 
-                                             * dfac[std::max(2 * am.b() - 1, 0)]
-                                             * dfac[std::max(2 * am.c() - 1, 0)]
-                                             * dfac[std::max(2 * am.d() - 1, 0)]);
+        this->abstract_acc_context::set_quartet(la, lb, lc, ld, max_prim_per_contr, max_contr_per_quartet);
         if(this->is_functional)
         {
             this->is_functional = false;
-            std::string base_dir = "/pc2/groups/pc2-mitarbeiter/xinwu/results-hpc-prf-erifpga/from-pc2data/Xin/For_Robert/1st_round/";
+            std::string base_dir = "/pc2/groups/pc2-mitarbeiter/XXX/results-hpc-prf-erifpga/from-pc2data/XXX/For_YYY/1st_round/";
 
 
             std::stringstream ss_abcd_int;
@@ -688,7 +190,7 @@ namespace libheric
             }
             else
             {
-                abcd_id = this->am.b() + (MAX_AM + 1) * ( this->am.a() + (MAX_AM + 1) * ( this->am.d() + (MAX_AM + 1) * this->am.d())); 
+                abcd_id = this->am.b() + (MAX_AM + 1) * ( this->am.a() + (MAX_AM + 1) * ( this->am.d() + (MAX_AM + 1) * this->am.c())); 
                 ss_abcd_int << this->am.c() << this->am.d() << this->am.a() << this->am.b();
             }
             
@@ -873,6 +375,7 @@ namespace libheric
             // Push back two fake completed computation events to trigger new computation events
             comp_events.push_back(sycl::event());
             comp_events.push_back(sycl::event());
+
             this->is_functional = true;
         }
     }
@@ -906,12 +409,8 @@ namespace libheric
     void oneapi_acc_context::set_exponent_id(int quartet_pos, int exp_id)
     {
         acc_context::set_exponent_id(quartet_pos, exp_id);
-        double exp_val =  sim_box.exponents(this->exp_off(quartet_pos));
-        double t = two_over_pi * exp_val;
 
         this->quartet_tmpl.exp(quartet_pos) = exp_val;
-        this->norm_coeffs[quartet_pos] = (quartet_pos == 0 ? 1.0 : this->norm_coeffs[quartet_pos - 1])
-                                       * std::sqrt(std::sqrt(t * t * t) * powern(4.0 * exp_val, am.raw[quartet_pos]));  
     }
     
     void oneapi_acc_context::set_offset(int off_pos, int off_x, int off_y, int off_z)
@@ -997,10 +496,10 @@ namespace libheric
         
        
         int32_t lmax = am.max();
-        auto libint_res = libint_oshgp(lmax, am, offset_quartet, this->libint_perm);
-        libint_maxl_ref.push(cart2sph(cpu_rys_am, mnc2uns, libint_res[0]));
-        libint_unit_ref.push(cart2sph(cpu_rys_am, unc2uns, libint_res[1]));
-        libint2_ref.push(libint_res[2]);
+        //auto libint_res = libint_oshgp(lmax, am, offset_quartet, this->libint_perm);
+        //libint_maxl_ref.push(cart2sph(cpu_rys_am, mnc2uns, libint_res[0]));
+        //libint_unit_ref.push(cart2sph(cpu_rys_am, unc2uns, libint_res[1]));
+        //libint2_ref.push(libint_res[2]);
 
         std::vector<double> rys_res = rys_quadrature<double>(cpu_rys_am, cpu_rys_quartet, cpu_rys_rtwt);
         rys_ref.push(cart2sph(cpu_rys_am, mnc2uns, rys_res));
@@ -1141,72 +640,104 @@ namespace libheric
         }
     }
 
-    void oneapi_acc_context::get_next_ceri(double* integral_buffer)
+    //void oneapi_acc_context::get_next_ceri(double* integral_buffer)
+    //{
+    //    if(this->new_quartet_class_for_consume || ceri_ctr == this->ceri_offsets[consume_db].size() - 1)
+    //    {
+    //        if(this->new_quartet_class_for_consume)
+    //        {
+    //            std::cout << "Before consuming" << std::endl;
+    //            start_consuming.acquire();
+    //            std::cout << "After consuming" << std::endl;
+    //            this->new_quartet_class_for_consume = false;
+    //        }
+
+    //        overwrite_quartet_batch.release();
+    //        consume_db = (consume_db + 1) % 2;
+    //        this->evt_eri_c[consume_db].wait();
+    //        this->evt_eps[consume_db].wait();
+    //        ceri_ctr = 0;
+    //    }
+    //    std::cout << "ceri_ctr = " << ceri_ctr << ", consume_db = " << consume_db << std::endl;
+    //    std::cout << "ceri_offsets[0].size = " << ceri_offsets[0].size() << ", ceri_offsets[1].size = " << ceri_offsets[1].size() << std::endl;
+
+    //    uint32_t ceri_range_start = this->ceri_offsets[consume_db][ceri_ctr];
+    //    uint32_t ceri_range_end   = this->ceri_offsets[consume_db][ceri_ctr + 1];
+    //    uint32_t eris_per_n512 = 512 / this->cbits;
+    //    float* _tmp_integral_buffer = new(std::align_val_t(32)) float[n512_per_quartet * eris_per_n512];
+    //    std::cout << "Contracting " << ceri_range_end - ceri_range_start << " quartets" << std::endl;
+    //    for(uint32_t c = ceri_range_start;c < ceri_range_end;c++)
+    //    {
+    //        uint32_t c_off = c * this->n512_per_quartet * this->n8_per_n512;
+    //        //decomp.decompress(&(this->host_eri_c[consume_db][c_off]), 
+    //        //                  this->host_eps[consume_db][c],
+    //        //                  this->n512_per_quartet,
+    //        //                  _tmp_integral_buffer
+    //        //                  );
+    //        sdecomp.decompress(&(this->host_eri_c[consume_db][c_off]), 
+    //                           this->host_eps[consume_db][c],
+    //                           this->n512_per_quartet,
+    //                           _tmp_integral_buffer
+    //                           );
+    //        std::vector<float> _fpga_sph_integrals = permute_sph_quartet_scalar_single[this->fpga_perm](_tmp_integral_buffer, am);
+    //        std::vector<double> fpga_sph_integrals;
+    //        std::transform(_fpga_sph_integrals.begin(), _fpga_sph_integrals.end(), std::back_inserter(fpga_sph_integrals), [](float elem){return double(elem);});
+    //        //std::vector<double> lmref = libint_maxl_ref.front();
+    //        //std::vector<double> luref = libint_unit_ref.front();
+    //        //std::vector<double> l2ref = libint2_ref.front();
+    //        std::vector<double> rref = rys_ref.front();
+    //        //libint_maxl_ref.pop();
+    //        //libint_unit_ref.pop();
+    //        //libint2_ref.pop();
+    //        rys_ref.pop();
+
+    //        std::cout << "Primitive #" << c << ": ( fpga_eps = " << this->host_eps[consume_db][c] << '\n';
+    //        //std::cout << "libint-maxl-libint-unit-error: ";
+    //        //display_quartet_error<false>(this->am, &luref[0], &lmref[0]); 
+    //        //std::cout << "libint-maxl-libint2-error: ";
+    //        //display_quartet_error<false>(this->am, &l2ref[0], &lmref[0]); 
+    //        //std::cout << "libint-maxl-rys-cpu-error: ";
+    //        //display_quartet_error<false>(this->am, &rref[0], &lmref[0]); 
+    //        std::cout << "rys_cpu--rys-fpga-error: ";
+    //        display_quartet_error<false>(this->am, &fpga_sph_integrals[0], &rref[0], 9.999e-5); 
+    //        std::cout << '\n';
+    //    }
+    //    delete[] _tmp_integral_buffer;
+
+    //    for(uint32_t q = 0;q < this->am.sph_size();q++)integral_buffer[q] = 0.0;
+    //    
+    //    ceri_ctr++;
+    //}
+#else
+    oneapi_acc_context::oneapi_acc_context(const acc_device& acc_dev, 
+                                           const simulation_box& sim_box,
+                                           uint32_t num_contexts,
+                                           uint64_t mem_available,
+                                           bool compute_raw_cartesian,
+                                           abstract_acc_context* master_ctx)
+        : abstract_acc_context(acc_dev, sim_box, num_contexts, mem_available, compute_raw_cartesian, master_ctx)
     {
-        if(this->new_quartet_class_for_consume || ceri_ctr == this->ceri_offsets[consume_db].size() - 1)
-        {
-            if(this->new_quartet_class_for_consume)
-            {
-                std::cout << "Before consuming" << std::endl;
-                start_consuming.acquire();
-                std::cout << "After consuming" << std::endl;
-                this->new_quartet_class_for_consume = false;
-            }
-
-            overwrite_quartet_batch.release();
-            consume_db = (consume_db + 1) % 2;
-            this->evt_eri_c[consume_db].wait();
-            this->evt_eps[consume_db].wait();
-            ceri_ctr = 0;
-        }
-        std::cout << "ceri_ctr = " << ceri_ctr << ", consume_db = " << consume_db << std::endl;
-        std::cout << "ceri_offsets[0].size = " << ceri_offsets[0].size() << ", ceri_offsets[1].size = " << ceri_offsets[1].size() << std::endl;
-
-        uint32_t ceri_range_start = this->ceri_offsets[consume_db][ceri_ctr];
-        uint32_t ceri_range_end   = this->ceri_offsets[consume_db][ceri_ctr + 1];
-        uint32_t eris_per_n512 = 512 / this->cbits;
-        float* _tmp_integral_buffer = new(std::align_val_t(32)) float[n512_per_quartet * eris_per_n512];
-        std::cout << "Contracting " << ceri_range_end - ceri_range_start << " quartets" << std::endl;
-        for(uint32_t c = ceri_range_start;c < ceri_range_end;c++)
-        {
-            uint32_t c_off = c * this->n512_per_quartet * this->n8_per_n512;
-            //decomp.decompress(&(this->host_eri_c[consume_db][c_off]), 
-            //                  this->host_eps[consume_db][c],
-            //                  this->n512_per_quartet,
-            //                  _tmp_integral_buffer
-            //                  );
-            sdecomp.decompress(&(this->host_eri_c[consume_db][c_off]), 
-                               this->host_eps[consume_db][c],
-                               this->n512_per_quartet,
-                               _tmp_integral_buffer
-                               );
-            std::vector<float> _fpga_sph_integrals = permute_sph_quartet_scalar_single[this->fpga_perm](_tmp_integral_buffer, am);
-            std::vector<double> fpga_sph_integrals;
-            std::transform(_fpga_sph_integrals.begin(), _fpga_sph_integrals.end(), std::back_inserter(fpga_sph_integrals), [](float elem){return double(elem);});
-            std::vector<double> lmref = libint_maxl_ref.front();
-            std::vector<double> luref = libint_unit_ref.front();
-            std::vector<double> l2ref = libint2_ref.front();
-            std::vector<double> rref = rys_ref.front();
-            libint_maxl_ref.pop();
-            libint_unit_ref.pop();
-            libint2_ref.pop();
-            rys_ref.pop();
-
-            std::cout << "Primitive #" << c << ": ( fpga_eps = " << this->host_eps[consume_db][c] << '\n';
-            std::cout << "libint-maxl-libint-unit-error: ";
-            display_quartet_error<false>(this->am, &luref[0], &lmref[0]); 
-            std::cout << "libint-maxl-libint2-error: ";
-            display_quartet_error<false>(this->am, &l2ref[0], &lmref[0]); 
-            std::cout << "libint-maxl-rys-cpu-error: ";
-            display_quartet_error<false>(this->am, &rref[0], &lmref[0]); 
-            std::cout << "libint-maxl-rys-fpga-error: ";
-            display_quartet_error<false>(this->am, &fpga_sph_integrals[0], &lmref[0], 9.999e-5); 
-            std::cout << '\n';
-        }
-        delete[] _tmp_integral_buffer;
-
-        for(uint32_t q = 0;q < this->am.sph_size();q++)integral_buffer[q] = 0.0;
-        
-        ceri_ctr++;
     }
+
+    oneapi_acc_context::~oneapi_acc_context(){}
+    void oneapi_acc_context::set_B_offset(int off_x, int off_y, int off_z)
+    {
+    }
+    
+    void oneapi_acc_context::set_D_offset(int off_x, int off_y, int off_z)
+    {
+    }
+
+    void oneapi_acc_context::set_exponent_ids(int exp_a, int exp_b, int exp_c, int exp_d) 
+    {
+    }
+    
+    void oneapi_acc_context::set_Q_offset(int off_x, int off_y, int off_z)
+    {
+    }
+
+    void oneapi_acc_context::submit_peri()
+    {
+    }
+#endif
 }

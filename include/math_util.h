@@ -3,7 +3,7 @@
 
 namespace libheric {
     // Compute x^n for real x and positive integer n
-    inline double powern(const double  x, const uint32_t n)
+    inline double powern(const double x, const uint32_t n)
     {
         double res = 1.0;
         for (uint32_t i = 0; i < n; i++) res *= x;
@@ -15,6 +15,20 @@ namespace libheric {
         if(n < 0) return 0;
         int64_t res = 1;
         for(int64_t i = 1;i <= n;i++) res *= i;
+        return res;
+    }
+
+    constexpr uint64_t ipow2(uint64_t n)
+    {
+        uint64_t res = 1;
+        for(uint64_t i = 0;i < n;i++)res *= 2;
+        return res;
+    }
+    
+    constexpr uint64_t ipow(uint64_t x, uint64_t n)
+    {
+        uint64_t res = 1;
+        for(uint64_t i = 0;i < n;i++)res *= x;
         return res;
     }
 
